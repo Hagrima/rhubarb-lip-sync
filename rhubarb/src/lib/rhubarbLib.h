@@ -9,14 +9,14 @@
 
 JoiningContinuousTimeline<Shape> animateAudioClip(
 	const AudioClip& audioClip,
-	boost::optional<std::string> dialog,
+	double modelWeight,
 	const ShapeSet& targetShapeSet,
 	int maxThreadCount,
 	ProgressSink& progressSink);
 
 JoiningContinuousTimeline<Shape> animateWaveFile(
 	boost::filesystem::path filePath,
-	boost::optional<std::string> dialog,
+	double modelWeight,
 	const ShapeSet& targetShapeSet,
 	int maxThreadCount,
 	ProgressSink& progressSink);

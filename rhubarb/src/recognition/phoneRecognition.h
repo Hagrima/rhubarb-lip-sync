@@ -7,6 +7,6 @@
 
 BoundedTimeline<Phone> recognizePhones(
 	const AudioClip& audioClip,
-	boost::optional<std::string> dialog,
+	double modelWeight,
 	int maxThreadCount,
 	ProgressSink& progressSink);

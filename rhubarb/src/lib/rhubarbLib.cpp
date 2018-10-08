@@ -12,23 +12,23 @@ using std::unique_ptr;
 
 JoiningContinuousTimeline<Shape> animateAudioClip(
 	const AudioClip& audioClip,
-	optional<string> dialog,
+	double modelWeight,
 	const ShapeSet& targetShapeSet,
 	int maxThreadCount,
 	ProgressSink& progressSink)
 {
-	BoundedTimeline<Phone> phones = recognizePhones(audioClip, dialog, maxThreadCount, progressSink);
+	BoundedTimeline<Phone> phones = recognizePhones(audioClip, modelWeight, maxThreadCount, progressSink);
 	JoiningContinuousTimeline<Shape> result = animate(phones, targetShapeSet);
 	return result;
 }
 
 JoiningContinuousTimeline<Shape> animateWaveFile(
 	path filePath,
-	optional<string> dialog,
+	double modelWeight,
 	const ShapeSet& targetShapeSet,
 	int maxThreadCount,
 	ProgressSink& progressSink)
 {
 	const auto audioClip = createAudioFileClip(filePath);
-	return animateAudioClip(*audioClip, dialog, targetShapeSet, maxThreadCount, progressSink);
+	return animateAudioClip(*audioClip, modelWeight, targetShapeSet, maxThreadCount, progressSink);
 }

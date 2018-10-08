@@ -118,8 +118,8 @@ int main(int platformArgc, char *platformArgv[]) {
 	tclap::SwitchArg machineReadableMode("", "machineReadable", "Formats all output to stderr in a structured JSON format.", cmd, false);
 	tclap::SwitchArg quietMode("q", "quiet", "Suppresses all output to stderr except for warnings and error messages.", cmd, false);
 	tclap::ValueArg<int> maxThreadCount("", "threads", "The maximum number of worker threads to use.", false, getProcessorCoreCount(), "number", cmd);
+	tclap::ValueArg<double> modelWeight("", "modelWeight", "Temporary hack: language model weight", true, 1.0, "number", cmd);
 	tclap::ValueArg<string> extendedShapes("", "extendedShapes", "All extended, optional shapes to use.", false, "GHX", "string", cmd);
-	tclap::ValueArg<string> dialogFile("d", "dialogFile", "A file containing the text of the dialog.", false, string(), "string", cmd);
 	auto exportFormats = vector<ExportFormat>(ExportFormatConverter::get().getValues());
 	tclap::ValuesConstraint<ExportFormat> exportFormatConstraint(exportFormats);
 	tclap::ValueArg<ExportFormat> exportFormat("f", "exportFormat", "The export format.", false, ExportFormat::Tsv, &exportFormatConstraint, cmd);
@@ -168,7 +168,7 @@ int main(int platformArgc, char *platformArgv[]) {
 			logging::info("Starting animation.");
 			JoiningContinuousTimeline<Shape> animation = animateWaveFile(
 				inputFilePath,
-				dialogFile.isSet() ? readUtf8File(path(dialogFile.getValue())) : boost::optional<string>(),
+				modelWeight.getValue(),
 				targetShapeSet,
 				maxThreadCount.getValue(),
 				progressSink);

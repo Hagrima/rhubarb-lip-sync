@@ -281,20 +281,22 @@ lambda_unique_ptr<ngram_model_t> createBiasedLanguageModel(ps_decoder_t& decoder
 	return std::move(result);
 }
 
-lambda_unique_ptr<ps_decoder_t> createDecoder(optional<string> dialog) {
+lambda_unique_ptr<ps_decoder_t> createDecoder(double modelWeight) {
 	lambda_unique_ptr<cmd_ln_t> config(
 		cmd_ln_init(
 			nullptr, ps_args(), true,
 			// Set acoustic model
 			"-hmm", (getSphinxModelDirectory() / "acoustic-model").string().c_str(),
-			// Set pronunciation dictionary
-			"-dict", (getSphinxModelDirectory() / "cmudict-en-us.dict").string().c_str(),
-			// Add noise against zero silence (see http://cmusphinx.sourceforge.net/wiki/faq#qwhy_my_accuracy_is_poor)
-			"-dither", "yes",
-			// Disable VAD -- we're doing that ourselves
-			"-remove_silence", "no",
-			// Perform per-utterance cepstral mean normalization
-			"-cmn", "batch",
+			// Set phonetic language model
+			"-allphone", (getSphinxModelDirectory() / "en-us-phone.lm.bin").string().c_str(),
+			"-allphone_ci", "yes",
+			// The following settings are taken from http://cmusphinx.sourceforge.net/wiki/phonemerecognition
+			// Set beam width applied to every frame in Viterbi search
+			"-beam", "1e-20",
+			// Set beam width applied to phone transitions
+			"-pbeam", "1e-20",
+			// Set language model probability weight
+			"-lw", fmt::format("{}", modelWeight).c_str(),
 			nullptr),
 		[](cmd_ln_t* config) { cmd_ln_free_r(config); });
 	if (!config) throw runtime_error("Error creating configuration.");
@@ -303,13 +305,6 @@ lambda_unique_ptr<ps_decoder_t> createDecoder(optional<string> dialog) {
 		ps_init(config.get()),
 		[](ps_decoder_t* recognizer) { ps_free(recognizer); });
 	if (!decoder) throw runtime_error("Error creating speech decoder.");
-
-	// Set language model
-	lambda_unique_ptr<ngram_model_t> languageModel(dialog
-		? createBiasedLanguageModel(*decoder, *dialog)
-		: createDefaultLanguageModel(*decoder));
-	ps_set_lm(decoder.get(), "lm", languageModel.get());
-	ps_set_search(decoder.get(), "lm");
 
 	return decoder;
 }
@@ -358,10 +353,6 @@ Timeline<Phone> utteranceToPhones(
 	ps_decoder_t& decoder,
 	ProgressSink& utteranceProgressSink)
 {
-	ProgressMerger utteranceProgressMerger(utteranceProgressSink);
-	ProgressSink& wordRecognitionProgressSink = utteranceProgressMerger.addSink(1.0);
-	ProgressSink& alignmentProgressSink = utteranceProgressMerger.addSink(0.5);
-
 	// Pad time range to give Pocketsphinx some breathing room
 	TimeRange paddedTimeRange = utteranceTimeRange;
 	const centiseconds padding(3);
@@ -371,48 +362,18 @@ Timeline<Phone> utteranceToPhones(
 	const unique_ptr<AudioClip> clipSegment = audioClip.clone() | segment(paddedTimeRange) | resample(sphinxSampleRate);
 	const auto audioBuffer = copyTo16bitBuffer(*clipSegment);
 
-	// Get words
-	BoundedTimeline<string> words = recognizeWords(audioBuffer, decoder);
-	wordRecognitionProgressSink.reportProgress(1.0);
-
-	// Log utterance text
-	string text;
-	for (auto& timedWord : words) {
-		string word = timedWord.getValue();
-		// Skip details
-		if (word == "<s>" || word == "</s>" || word == "<sil>") {
-			continue;
+	// Detect phones (returned as words)
+	BoundedTimeline<string> phoneStrings = recognizeWords(audioBuffer, decoder);
+	phoneStrings.shift(paddedTimeRange.getStart());
+	Timeline<Phone> utterancePhones;
+	for (const auto& timedPhoneString : phoneStrings) {
+		Phone phone = PhoneConverter::get().parse(timedPhoneString.getValue());
+		if (phone == Phone::AH && timedPhoneString.getDuration() < 6_cs) {
+			// Heuristic: < 6_cs is schwa. Pocketsphinx doesn't differentiate.
+			phone = Phone::Schwa;
 		}
-		word = regex_replace(word, regex("\\(\\d\\)"), "");
-		if (text.size() > 0) {
-			text += " ";
-		}
-		text += word;
+		utterancePhones.set(timedPhoneString.getTimeRange(), phone);
 	}
-	logTimedEvent("utterance", utteranceTimeRange, text);
-
-	// Log words
-	for (Timed<string> timedWord : words) {
-		timedWord.getTimeRange().shift(paddedTimeRange.getStart());
-		logTimedEvent("word", timedWord);
-	}
-
-	// Convert word strings to word IDs using dictionary
-	vector<s3wid_t> wordIds;
-	for (const auto& timedWord : words) {
-		const string fixedWord = fixPronunciation(timedWord.getValue());
-		wordIds.push_back(getWordId(fixedWord, *decoder.dict));
-	}
-	if (wordIds.empty()) return {};
-
-	// Align the words' phones with speech
-#if BOOST_VERSION < 105600 // Support legacy syntax
-#define value_or get_value_or
-#endif
-	Timeline<Phone> utterancePhones = getPhoneAlignment(wordIds, audioBuffer, decoder)
-		.value_or(ContinuousTimeline<Phone>(clipSegment->getTruncatedRange(), Phone::Noise));
-	alignmentProgressSink.reportProgress(1.0);
-	utterancePhones.shift(paddedTimeRange.getStart());
 
 	// Log raw phones
 	for (const auto& timedPhone : utterancePhones) {
@@ -430,12 +391,14 @@ Timeline<Phone> utteranceToPhones(
 		logTimedEvent("phone", timedPhone);
 	}
 
+	utteranceProgressSink.reportProgress(1.0);
+
 	return utterancePhones;
 }
 
 BoundedTimeline<Phone> recognizePhones(
 	const AudioClip& inputAudioClip,
-	optional<string> dialog,
+	double modelWeight,
 	int maxThreadCount,
 	ProgressSink& progressSink)
 {
@@ -463,7 +426,7 @@ BoundedTimeline<Phone> recognizePhones(
 
 	// Prepare pool of decoders
 	ObjectPool<ps_decoder_t, lambda_unique_ptr<ps_decoder_t>> decoderPool(
-		[&dialog] { return createDecoder(dialog); });
+		[&] { return createDecoder(modelWeight); });
 
 	BoundedTimeline<Phone> phones(audioClip->getTruncatedRange());
 	std::mutex resultMutex;
